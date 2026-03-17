@@ -7,6 +7,7 @@ use App\Models\SystemSetting;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\URL;
 
 class SystemSettingsController extends Controller
 {
@@ -17,14 +18,27 @@ class SystemSettingsController extends Controller
         ]);
     }
 
+    /**
+     * Return absolute URL for a storage path (logo/auth background).
+     * Uses APP_URL so production always gets correct full URL regardless of frontend domain.
+     */
+    protected function storageUrl(?string $path): ?string
+    {
+        if (! $path || ! trim($path)) {
+            return null;
+        }
+        $path = ltrim(str_replace('\\', '/', $path), '/');
+        return URL::asset('storage/'.$path);
+    }
+
     public function showPublic(): JsonResponse
     {
         $settings = $this->getSettings();
 
         return response()->json([
             'app_name' => $settings->app_name,
-            'logo_url' => $settings->logo_path ? Storage::url($settings->logo_path) : null,
-            'auth_background_url' => $settings->auth_background_path ? Storage::url($settings->auth_background_path) : null,
+            'logo_url' => $this->storageUrl($settings->logo_path),
+            'auth_background_url' => $this->storageUrl($settings->auth_background_path),
         ]);
     }
 
@@ -42,8 +56,8 @@ class SystemSettingsController extends Controller
 
         return response()->json([
             'app_name' => $settings->app_name,
-            'logo_url' => $settings->logo_path ? Storage::url($settings->logo_path) : null,
-            'auth_background_url' => $settings->auth_background_path ? Storage::url($settings->auth_background_path) : null,
+            'logo_url' => $this->storageUrl($settings->logo_path),
+            'auth_background_url' => $this->storageUrl($settings->auth_background_path),
         ]);
     }
 
@@ -66,7 +80,7 @@ class SystemSettingsController extends Controller
         ]);
 
         return response()->json([
-            'logo_url' => Storage::url($path),
+            'logo_url' => $this->storageUrl($path),
         ]);
     }
 
@@ -89,7 +103,7 @@ class SystemSettingsController extends Controller
         ]);
 
         return response()->json([
-            'auth_background_url' => Storage::url($path),
+            'auth_background_url' => $this->storageUrl($path),
         ]);
     }
 }
