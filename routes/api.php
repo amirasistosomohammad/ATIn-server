@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\DocumentController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\SystemSettingsController;
+use App\Http\Controllers\Api\StorageController;
 use App\Http\Controllers\Api\BackupController;
 
 // Public auth routes
@@ -19,9 +20,8 @@ Route::post('/password/reset', [AuthController::class, 'resetPassword']);
 
 // Public system settings (for app name & logo)
 Route::get('/settings', [SystemSettingsController::class, 'showPublic']);
-// Serve logo and auth background from API (no storage:link needed; works in production)
-Route::get('/settings/logo', [SystemSettingsController::class, 'serveLogo']);
-Route::get('/settings/auth-background', [SystemSettingsController::class, 'serveAuthBackground']);
+// Serve storage files via API (same as TheMidTaskApp—works in production without storage:link)
+Route::get('/storage/{path}', [StorageController::class, 'serve'])->where('path', '.*');
 
 // Protected routes (Laravel Sanctum, token expires in 8 hours; inactive users get 403)
 Route::middleware(['auth:sanctum', 'user.active'])->group(function () {

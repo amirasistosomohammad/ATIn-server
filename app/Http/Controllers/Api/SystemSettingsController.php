@@ -18,73 +18,28 @@ class SystemSettingsController extends Controller
     }
 
     /**
-     * Build absolute URL to the API endpoint that serves the logo (same host as current request).
-     * Works behind any proxy; no dependency on APP_URL or storage link.
+     * Build storage URL for a path. Same pattern as TheMidTaskApp: use api/storage/{path}
+     * so the file is served by Laravel—works in production without storage:link.
+     * Base URL is taken from the current request so it works behind proxies.
      */
-    protected function logoEndpointUrl(Request $request): ?string
+    protected function storageUrl(Request $request, ?string $path): ?string
     {
+        if (! $path || $path === '') {
+            return null;
+        }
+        $path = ltrim(str_replace(['../', '..\\'], '', $path), '/');
+        if ($path === '' || str_contains($path, '..')) {
+            return null;
+        }
         $base = rtrim($request->getSchemeAndHttpHost().$request->getBasePath(), '/');
-        return $base.'/api/settings/logo';
-    }
-
-    /**
-     * Build absolute URL to the API endpoint that serves the auth background.
-     */
-    protected function authBackgroundEndpointUrl(Request $request): ?string
-    {
-        $base = rtrim($request->getSchemeAndHttpHost().$request->getBasePath(), '/');
-        return $base.'/api/settings/auth-background';
-    }
-
-    /**
-     * Serve logo image from storage. Public, no auth. Works in production without storage:link.
-     */
-    public function serveLogo(Request $request)
-    {
-        $settings = $this->getSettings();
-        if (! $settings->logo_path) {
-            return response()->json(['message' => 'No logo set.'], 404);
-        }
-        $path = $settings->logo_path;
-        if (! Storage::disk('public')->exists($path)) {
-            return response()->json(['message' => 'Logo file not found.'], 404);
-        }
-        $fullPath = Storage::disk('public')->path($path);
-        $mime = mime_content_type($fullPath) ?: 'image/png';
-
-        return response()->file($fullPath, [
-            'Content-Type' => $mime,
-            'Cache-Control' => 'public, max-age=3600',
-        ]);
-    }
-
-    /**
-     * Serve auth background image from storage. Public, no auth.
-     */
-    public function serveAuthBackground(Request $request)
-    {
-        $settings = $this->getSettings();
-        if (! $settings->auth_background_path) {
-            return response()->json(['message' => 'No auth background set.'], 404);
-        }
-        $path = $settings->auth_background_path;
-        if (! Storage::disk('public')->exists($path)) {
-            return response()->json(['message' => 'Auth background file not found.'], 404);
-        }
-        $fullPath = Storage::disk('public')->path($path);
-        $mime = mime_content_type($fullPath) ?: 'image/png';
-
-        return response()->file($fullPath, [
-            'Content-Type' => $mime,
-            'Cache-Control' => 'public, max-age=3600',
-        ]);
+        return $base.'/api/storage/'.$path;
     }
 
     public function showPublic(Request $request): JsonResponse
     {
         $settings = $this->getSettings();
-        $logoUrl = $settings->logo_path ? $this->logoEndpointUrl($request) : null;
-        $authBgUrl = $settings->auth_background_path ? $this->authBackgroundEndpointUrl($request) : null;
+        $logoUrl = $this->storageUrl($request, $settings->logo_path);
+        $authBgUrl = $this->storageUrl($request, $settings->auth_background_path);
 
         return response()->json([
             'app_name' => $settings->app_name,
@@ -107,8 +62,8 @@ class SystemSettingsController extends Controller
 
         return response()->json([
             'app_name' => $settings->app_name,
-            'logo_url' => $settings->logo_path ? $this->logoEndpointUrl($request) : null,
-            'auth_background_url' => $settings->auth_background_path ? $this->authBackgroundEndpointUrl($request) : null,
+            'logo_url' => $this->storageUrl($request, $settings->logo_path),
+            'auth_background_url' => $this->storageUrl($request, $settings->auth_background_path),
         ]);
     }
 
@@ -131,7 +86,7 @@ class SystemSettingsController extends Controller
         ]);
 
         return response()->json([
-            'logo_url' => $this->logoEndpointUrl($request),
+            'logo_url' => $this->storageUrl($request, $path),
         ]);
     }
 
@@ -154,7 +109,7 @@ class SystemSettingsController extends Controller
         ]);
 
         return response()->json([
-            'auth_background_url' => $this->authBackgroundEndpointUrl($request),
+            'auth_background_url' => $this->storageUrl($request, $path),
         ]);
     }
 }
