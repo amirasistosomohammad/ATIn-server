@@ -59,7 +59,7 @@ Route::middleware(['auth:sanctum', 'user.active'])->group(function () {
     Route::get('/documents/by-control-number/{controlNumber}', [DocumentController::class, 'showByControlNumber']);
     Route::post('/documents/{document}/in', [DocumentController::class, 'in']);
     Route::post('/documents/{document}/out', [DocumentController::class, 'out']);
-    Route::apiResource('documents', DocumentController::class)->only(['index', 'store', 'show']);
+    Route::apiResource('documents', DocumentController::class)->only(['index', 'store', 'show', 'update']);
 
     // Reports (optional ?format=csv for CSV download)
     Route::get('/reports/tracking', [ReportController::class, 'tracking']);

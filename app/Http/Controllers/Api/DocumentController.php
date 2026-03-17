@@ -49,6 +49,66 @@ class DocumentController extends Controller
     }
 
     /**
+     * Update an existing document's metadata.
+     * Only the personnel user who registered the document may update it,
+     * and only while there are no logbook movements recorded yet.
+     */
+    public function update(Request $request, Document $document): JsonResponse
+    {
+        // Admins are read-only for documents; only personnel can edit.
+        if ($request->user()->role === 'admin') {
+            return response()->json([
+                'message' => 'Administrators cannot edit documents. This action is for personnel only.',
+            ], 403);
+        }
+
+        // Only the creator/owner may edit their document.
+        if ((int) $document->created_by_user_id !== (int) $request->user()->id) {
+            return response()->json([
+                'message' => 'Only the personnel user who registered this control number may edit it.',
+            ], 403);
+        }
+
+        // Once there is movement in the logbook, freeze the registration fields for accountability.
+        if ($document->logbookEntries()->exists()) {
+            return response()->json([
+                'message' => 'This document already has logbook entries and can no longer be edited.',
+            ], 422);
+        }
+
+        $validated = $request->validate([
+            'control_number' => ['sometimes', 'required', 'string', 'max:255', 'unique:documents,control_number,' . $document->id],
+            'document_type_id' => ['sometimes', 'required', 'integer', 'exists:document_types,id'],
+            'description' => ['nullable', 'string', 'max:65535'],
+            'supplier_name' => ['nullable', 'string', 'max:255'],
+            'amount' => ['nullable', 'numeric', 'min:0'],
+            'date_prepared' => ['nullable', 'date'],
+        ]);
+
+        $document->fill($validated);
+        $document->save();
+
+        $document->load([
+            'documentType:id,name,code',
+            'createdBy:id,name,email,section_unit,designation_position',
+            'currentHolder:id,name,email,section_unit,designation_position',
+            'logbookEntries' => fn ($q) => $q->with('user:id,name,email,section_unit,designation_position')->orderBy('moved_at', 'asc'),
+        ]);
+
+        AuditLog::log(
+            $request->user()->id,
+            'document_updated',
+            $document->id,
+            $document->control_number,
+            $validated,
+            $request->user()->email,
+            $request
+        );
+
+        return response()->json($document);
+    }
+
+    /**
      * List documents with optional filters.
      * Query params: document_type_id, status, control_number, created_by_me (1 = only documents I created).
      */
