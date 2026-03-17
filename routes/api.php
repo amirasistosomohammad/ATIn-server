@@ -19,6 +19,9 @@ Route::post('/password/reset', [AuthController::class, 'resetPassword']);
 
 // Public system settings (for app name & logo)
 Route::get('/settings', [SystemSettingsController::class, 'showPublic']);
+// Serve logo and auth background from API (no storage:link needed; works in production)
+Route::get('/settings/logo', [SystemSettingsController::class, 'serveLogo']);
+Route::get('/settings/auth-background', [SystemSettingsController::class, 'serveAuthBackground']);
 
 // Protected routes (Laravel Sanctum, token expires in 8 hours; inactive users get 403)
 Route::middleware(['auth:sanctum', 'user.active'])->group(function () {
