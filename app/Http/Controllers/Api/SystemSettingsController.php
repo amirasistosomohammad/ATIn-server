@@ -45,6 +45,8 @@ class SystemSettingsController extends Controller
             'app_name' => $settings->app_name,
             'logo_url' => $logoUrl,
             'auth_background_url' => $authBgUrl,
+            'logo_path' => $settings->logo_path,
+            'auth_background_path' => $settings->auth_background_path,
         ]);
     }
 
@@ -64,6 +66,8 @@ class SystemSettingsController extends Controller
             'app_name' => $settings->app_name,
             'logo_url' => $this->storageUrl($request, $settings->logo_path),
             'auth_background_url' => $this->storageUrl($request, $settings->auth_background_path),
+            'logo_path' => $settings->logo_path,
+            'auth_background_path' => $settings->auth_background_path,
         ]);
     }
 
@@ -87,6 +91,7 @@ class SystemSettingsController extends Controller
 
         return response()->json([
             'logo_url' => $this->storageUrl($request, $path),
+            'logo_path' => $path,
         ]);
     }
 
@@ -110,6 +115,7 @@ class SystemSettingsController extends Controller
 
         return response()->json([
             'auth_background_url' => $this->storageUrl($request, $path),
+            'auth_background_path' => $path,
         ]);
     }
 }
