@@ -18,6 +18,7 @@ class Document extends Model
      */
     protected $fillable = [
         'document_type_id',
+        'document_type_other',
         'control_number',
         'description',
         'status',
@@ -71,5 +72,22 @@ class Document extends Model
     public function logbookEntries(): HasMany
     {
         return $this->hasMany(LogbookEntry::class)->orderBy('moved_at', 'asc');
+    }
+
+    /**
+     * Label for lists and exports, including free-text when type is "Other".
+     */
+    public function documentTypeLabel(): string
+    {
+        $type = $this->documentType;
+        $name = $type?->name ?? '';
+        if ($type && $type->isOtherChoice()) {
+            $spec = trim((string) ($this->document_type_other ?? ''));
+            if ($spec !== '') {
+                return $name.' ('.$spec.')';
+            }
+        }
+
+        return $name;
     }
 }

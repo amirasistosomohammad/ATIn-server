@@ -3,10 +3,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use Ifsnop\Mysqldump\Mysqldump;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use PDO;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class BackupController extends Controller
@@ -98,29 +100,154 @@ class BackupController extends Controller
         ]);
     }
 
-    public function downloadNow(): StreamedResponse
+    /**
+     * Same host rules as Laravel MySQL connector; avoids Windows localhost edge cases.
+     */
+    protected function normalizeMysqlHost(string $host): string
     {
-        $connection = Config::get('database.default');
-        $dbName = Config::get("database.connections.$connection.database");
-        $username = Config::get("database.connections.$connection.username");
-        $password = Config::get("database.connections.$connection.password");
-        $host = Config::get("database.connections.$connection.host", '127.0.0.1');
+        if (PHP_OS_FAMILY === 'Windows') {
+            $h = strtolower(trim($host));
+            if (in_array($h, ['localhost', '::1'], true)) {
+                return '127.0.0.1';
+            }
+        }
 
-        $filename = 'atin-backup-' . now()->format('Ymd_His') . '.sql';
-        $path = $this->backupsPath() . '/' . $filename;
+        return $host;
+    }
 
-        $cmd = sprintf(
-            'mysqldump -h%s -u%s -p%s %s 2>&1',
-            escapeshellarg($host),
-            escapeshellarg($username),
-            escapeshellarg($password),
-            escapeshellarg($dbName)
+    /**
+     * PDO DSN aligned with Illuminate\Database\Connectors\MySqlConnector.
+     */
+    protected function mysqlDsnFromLaravelConfig(array $config): string
+    {
+        $database = $config['database'] ?? '';
+
+        if (! empty($config['unix_socket'])) {
+            return sprintf(
+                'mysql:unix_socket=%s;dbname=%s;charset=%s',
+                $config['unix_socket'],
+                $database,
+                $config['charset'] ?? 'utf8mb4'
+            );
+        }
+
+        $host = $this->normalizeMysqlHost((string) ($config['host'] ?? '127.0.0.1'));
+        $port = (string) ($config['port'] ?? '3306');
+
+        return sprintf(
+            'mysql:host=%s;port=%s;dbname=%s;charset=%s',
+            $host,
+            $port,
+            $database,
+            $config['charset'] ?? 'utf8mb4'
+        );
+    }
+
+    /**
+     * PDO attributes: Laravel connection options (e.g. SSL to managed DB) + non-persistent for HTTP requests.
+     *
+     * @return array<int, mixed>
+     */
+    protected function mysqlPdoSettingsForBackup(array $config): array
+    {
+        $fromConfig = $config['options'] ?? [];
+        if (! is_array($fromConfig)) {
+            $fromConfig = [];
+        }
+
+        $fromConfig = array_filter(
+            $fromConfig,
+            fn ($v) => $v !== null && $v !== ''
         );
 
-        $sql = shell_exec($cmd);
-        if (! $sql) {
-            return response()->json(['message' => 'Backup command failed. Check server configuration.'], 500);
+        return array_merge(
+            [PDO::ATTR_PERSISTENT => false],
+            $fromConfig
+        );
+    }
+
+    /**
+     * Pure PHP dump (no mysqldump binary). Uses the same PDO connection parameters as the app.
+     *
+     * @return array{ok: true, sql: string}|array{ok: false, message: string}
+     */
+    protected function runMysqlDump(): array
+    {
+        $connectionName = (string) Config::get('database.default');
+        $config = Config::get("database.connections.{$connectionName}");
+        if (! is_array($config)) {
+            return ['ok' => false, 'message' => 'Database configuration is missing.'];
         }
+
+        $driver = $config['driver'] ?? '';
+
+        if (! in_array($driver, ['mysql', 'mariadb'], true)) {
+            return [
+                'ok' => false,
+                'message' => 'SQL backup requires DB_CONNECTION=mysql or mariadb.',
+            ];
+        }
+
+        $dsn = $this->mysqlDsnFromLaravelConfig($config);
+        $user = (string) ($config['username'] ?? '');
+        $password = (string) ($config['password'] ?? '');
+        $pdoSettings = $this->mysqlPdoSettingsForBackup($config);
+
+        $dumpSettings = [
+            'default-character-set' => Mysqldump::UTF8MB4,
+            'single-transaction' => true,
+            'lock-tables' => false,
+            'routines' => true,
+            'events' => true,
+            'add-drop-table' => true,
+            'add-drop-trigger' => true,
+            'hex-blob' => true,
+        ];
+
+        $tmp = tempnam(sys_get_temp_dir(), 'atinbk_');
+        if ($tmp === false) {
+            return ['ok' => false, 'message' => 'Could not create a temporary file for the backup.'];
+        }
+
+        try {
+            $dump = new Mysqldump($dsn, $user, $password, $dumpSettings, $pdoSettings);
+            $dump->start($tmp);
+        } catch (\Throwable $e) {
+            if (is_file($tmp)) {
+                @unlink($tmp);
+            }
+
+            return [
+                'ok' => false,
+                'message' => 'Database backup failed: '.$e->getMessage(),
+            ];
+        }
+
+        $sql = @file_get_contents($tmp);
+        if (is_file($tmp)) {
+            @unlink($tmp);
+        }
+
+        if ($sql === false || $sql === '') {
+            return [
+                'ok' => false,
+                'message' => 'Backup produced no output. Check database credentials and permissions.',
+            ];
+        }
+
+        return ['ok' => true, 'sql' => $sql];
+    }
+
+    public function downloadNow(): StreamedResponse|JsonResponse
+    {
+        $dump = $this->runMysqlDump();
+        if (! $dump['ok']) {
+            return response()->json(['message' => $dump['message']], 500);
+        }
+
+        $sql = $dump['sql'];
+        $filename = 'atin-backup-'.now()->format('Ymd_His').'.sql';
+        $path = $this->backupsPath().'/'.$filename;
 
         $this->backupsDisk()->put($path, $sql);
 
@@ -143,7 +270,7 @@ class BackupController extends Controller
 
     public function downloadFile(string $filename)
     {
-        $path = $this->backupsPath() . '/' . $filename;
+        $path = $this->backupsPath().'/'.$filename;
         $disk = $this->backupsDisk();
 
         if (! $disk->exists($path)) {
@@ -155,4 +282,3 @@ class BackupController extends Controller
         ]);
     }
 }
-

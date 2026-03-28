@@ -8,7 +8,6 @@ use App\Models\LogbookEntry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
-use Illuminate\Support\Facades\DB;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -57,10 +56,12 @@ class ReportController extends Controller
 
         $data = $documents->map(function (Document $doc) {
             $lastEntry = $doc->logbookEntries->first();
+
             return [
                 'id' => $doc->id,
                 'control_number' => $doc->control_number,
                 'document_type' => $doc->documentType ? $doc->documentType->only(['id', 'name', 'code']) : null,
+                'document_type_other' => $doc->document_type_other,
                 'status' => $doc->status,
                 'current_holder' => $doc->currentHolder ? $doc->currentHolder->only(['id', 'name', 'email', 'section_unit', 'designation_position']) : null,
                 'last_movement' => $lastEntry ? [
@@ -119,7 +120,7 @@ class ReportController extends Controller
             'id' => $e->id,
             'document_id' => $e->document_id,
             'control_number' => $e->document?->control_number,
-            'document_type' => $e->document?->documentType?->name,
+            'document_type' => $e->document ? $e->document->documentTypeLabel() : null,
             'action' => $e->action,
             'user' => $e->user ? $e->user->only(['id', 'name', 'email', 'section_unit', 'designation_position']) : null,
             'moved_at' => $e->moved_at?->toIso8601String(),
@@ -128,6 +129,85 @@ class ReportController extends Controller
         ]);
 
         return response()->json(['data' => $data]);
+    }
+
+    /**
+     * Personnel-only view: the signed-in user's In/Out logbook rows with each document's
+     * current holder (custody), plus documents currently in this user's hands.
+     * Query: optional date_from, date_to (applied to transaction moved_at only).
+     */
+    public function personnelHistory(Request $request): JsonResponse
+    {
+        $request->validate([
+            'date_from' => ['nullable', 'date'],
+            'date_to' => ['nullable', 'date'],
+        ]);
+
+        $userId = (int) $request->user()->id;
+
+        $txQuery = LogbookEntry::query()
+            ->with([
+                'document.documentType',
+                'document.currentHolder:id,name,email,section_unit,designation_position',
+            ])
+            ->where('user_id', $userId);
+
+        if ($request->filled('date_from')) {
+            $txQuery->whereDate('moved_at', '>=', $request->date_from);
+        }
+        if ($request->filled('date_to')) {
+            $txQuery->whereDate('moved_at', '<=', $request->date_to);
+        }
+
+        $entries = $txQuery->orderByDesc('moved_at')->get();
+
+        $transactions = $entries->map(function (LogbookEntry $e) use ($userId) {
+            $doc = $e->document;
+            $holder = $doc?->currentHolder;
+
+            return [
+                'id' => $e->id,
+                'document_id' => $e->document_id,
+                'control_number' => $doc?->control_number,
+                'document_type' => $doc?->documentType ? $doc->documentType->only(['id', 'name', 'code']) : null,
+                'document_type_other' => $doc?->document_type_other,
+                'document_status' => $doc?->status,
+                'action' => $e->action,
+                'moved_at' => $e->moved_at?->toIso8601String(),
+                'remarks' => $e->remarks,
+                'registration_details' => $e->registration_details,
+                'current_holder' => $holder ? $holder->only(['id', 'name', 'email', 'section_unit', 'designation_position']) : null,
+                'you_are_current_holder' => $doc !== null && (int) ($doc->current_holder_user_id ?? 0) === $userId,
+            ];
+        });
+
+        $holdingDocs = Document::query()
+            ->with([
+                'documentType:id,name,code',
+                'createdBy:id,name,email,section_unit,designation_position',
+                'currentHolder:id,name,email,section_unit,designation_position',
+            ])
+            ->where('current_holder_user_id', $userId)
+            ->orderByDesc('updated_at')
+            ->get();
+
+        $currently_holding = $holdingDocs->map(function (Document $d) {
+            return [
+                'id' => $d->id,
+                'control_number' => $d->control_number,
+                'description' => $d->description,
+                'status' => $d->status,
+                'document_type' => $d->documentType ? $d->documentType->only(['id', 'name', 'code']) : null,
+                'document_type_other' => $d->document_type_other,
+                'created_by' => $d->createdBy ? $d->createdBy->only(['id', 'name', 'email', 'section_unit', 'designation_position']) : null,
+                'updated_at' => $d->updated_at?->toIso8601String(),
+            ];
+        });
+
+        return response()->json([
+            'transactions' => $transactions,
+            'currently_holding' => $currently_holding,
+        ]);
     }
 
     /**
@@ -171,7 +251,7 @@ class ReportController extends Controller
             'id' => $e->id,
             'document_id' => $e->document_id,
             'control_number' => $e->document?->control_number,
-            'document_type' => $e->document?->documentType?->name,
+            'document_type' => $e->document ? $e->document->documentTypeLabel() : null,
             'action' => $e->action,
             'user' => $e->user ? $e->user->only(['id', 'name', 'email', 'section_unit', 'designation_position']) : null,
             'moved_at' => $e->moved_at?->toIso8601String(),
@@ -186,7 +266,7 @@ class ReportController extends Controller
     {
         $headers = [
             'Content-Type' => 'text/csv',
-            'Content-Disposition' => 'attachment; filename="tracking-report-' . date('Y-m-d-His') . '.csv"',
+            'Content-Disposition' => 'attachment; filename="tracking-report-'.date('Y-m-d-His').'.csv"',
         ];
 
         return response()->streamDownload(function () use ($documents) {
@@ -196,7 +276,7 @@ class ReportController extends Controller
                 $last = $doc->logbookEntries->first();
                 fputcsv($out, [
                     $doc->control_number,
-                    $doc->documentType?->name ?? '',
+                    $doc->documentTypeLabel(),
                     $doc->status,
                     $doc->currentHolder?->name ?? '',
                     $last?->action ?? '',
@@ -205,14 +285,14 @@ class ReportController extends Controller
                 ]);
             }
             fclose($out);
-        }, 'tracking-report-' . date('Y-m-d-His') . '.csv', $headers);
+        }, 'tracking-report-'.date('Y-m-d-His').'.csv', $headers);
     }
 
     private function documentHistoryCsv($entries): StreamedResponse
     {
         $headers = [
             'Content-Type' => 'text/csv',
-            'Content-Disposition' => 'attachment; filename="document-history-' . date('Y-m-d-His') . '.csv"',
+            'Content-Disposition' => 'attachment; filename="document-history-'.date('Y-m-d-His').'.csv"',
         ];
 
         return response()->streamDownload(function () use ($entries) {
@@ -221,7 +301,7 @@ class ReportController extends Controller
             foreach ($entries as $e) {
                 fputcsv($out, [
                     $e->document?->control_number ?? '',
-                    $e->document?->documentType?->name ?? '',
+                    $e->document ? $e->document->documentTypeLabel() : '',
                     $e->action,
                     $e->user?->name ?? '',
                     $e->moved_at?->format('Y-m-d H:i:s') ?? '',
@@ -229,14 +309,14 @@ class ReportController extends Controller
                 ]);
             }
             fclose($out);
-        }, 'document-history-' . date('Y-m-d-His') . '.csv', $headers);
+        }, 'document-history-'.date('Y-m-d-His').'.csv', $headers);
     }
 
     private function accountabilityCsv($entries): StreamedResponse
     {
         $headers = [
             'Content-Type' => 'text/csv',
-            'Content-Disposition' => 'attachment; filename="accountability-report-' . date('Y-m-d-His') . '.csv"',
+            'Content-Disposition' => 'attachment; filename="accountability-report-'.date('Y-m-d-His').'.csv"',
         ];
 
         return response()->streamDownload(function () use ($entries) {
@@ -245,7 +325,7 @@ class ReportController extends Controller
             foreach ($entries as $e) {
                 fputcsv($out, [
                     $e->document?->control_number ?? '',
-                    $e->document?->documentType?->name ?? '',
+                    $e->document ? $e->document->documentTypeLabel() : '',
                     $e->action,
                     $e->user?->name ?? '',
                     $e->moved_at?->format('Y-m-d H:i:s') ?? '',
@@ -253,7 +333,7 @@ class ReportController extends Controller
                 ]);
             }
             fclose($out);
-        }, 'accountability-report-' . date('Y-m-d-His') . '.csv', $headers);
+        }, 'accountability-report-'.date('Y-m-d-His').'.csv', $headers);
     }
 
     private function trackingXlsx($documents): StreamedResponse
@@ -268,17 +348,18 @@ class ReportController extends Controller
             $last = $doc->logbookEntries->first();
             $sheet->fromArray([
                 $doc->control_number,
-                $doc->documentType?->name ?? '',
+                $doc->documentTypeLabel(),
                 $doc->status,
                 $doc->currentHolder?->name ?? '',
                 $last?->action ?? '',
                 $last?->moved_at?->format('Y-m-d H:i:s') ?? '',
                 $doc->created_at?->format('Y-m-d H:i:s') ?? '',
-            ], null, 'A' . $row);
+            ], null, 'A'.$row);
             $row++;
         }
 
-        $filename = 'tracking-report-' . date('Y-m-d-His') . '.xlsx';
+        $filename = 'tracking-report-'.date('Y-m-d-His').'.xlsx';
+
         return $this->streamXlsx($spreadsheet, $filename);
     }
 
@@ -292,16 +373,17 @@ class ReportController extends Controller
         foreach ($entries as $e) {
             $sheet->fromArray([
                 $e->document?->control_number ?? '',
-                $e->document?->documentType?->name ?? '',
+                $e->document ? $e->document->documentTypeLabel() : '',
                 $e->action,
                 $e->user?->name ?? '',
                 $e->moved_at?->format('Y-m-d H:i:s') ?? '',
                 $e->remarks ?? '',
-            ], null, 'A' . $row);
+            ], null, 'A'.$row);
             $row++;
         }
 
-        $filename = 'document-history-' . date('Y-m-d-His') . '.xlsx';
+        $filename = 'document-history-'.date('Y-m-d-His').'.xlsx';
+
         return $this->streamXlsx($spreadsheet, $filename);
     }
 
@@ -315,16 +397,17 @@ class ReportController extends Controller
         foreach ($entries as $e) {
             $sheet->fromArray([
                 $e->document?->control_number ?? '',
-                $e->document?->documentType?->name ?? '',
+                $e->document ? $e->document->documentTypeLabel() : '',
                 $e->action,
                 $e->user?->name ?? '',
                 $e->moved_at?->format('Y-m-d H:i:s') ?? '',
                 $e->remarks ?? '',
-            ], null, 'A' . $row);
+            ], null, 'A'.$row);
             $row++;
         }
 
-        $filename = 'accountability-report-' . date('Y-m-d-His') . '.xlsx';
+        $filename = 'accountability-report-'.date('Y-m-d-His').'.xlsx';
+
         return $this->streamXlsx($spreadsheet, $filename);
     }
 
@@ -337,7 +420,8 @@ class ReportController extends Controller
             'documents' => $documents,
             'generatedAt' => now()->format('Y-m-d H:i'),
         ]);
-        return $pdf->download('tracking-report-' . date('Y-m-d-His') . '.pdf');
+
+        return $pdf->download('tracking-report-'.date('Y-m-d-His').'.pdf');
     }
 
     private function documentHistoryPdf($entries): Response|JsonResponse
@@ -349,7 +433,8 @@ class ReportController extends Controller
             'entries' => $entries,
             'generatedAt' => now()->format('Y-m-d H:i'),
         ]);
-        return $pdf->download('document-history-' . date('Y-m-d-His') . '.pdf');
+
+        return $pdf->download('document-history-'.date('Y-m-d-His').'.pdf');
     }
 
     private function accountabilityPdf($entries): Response|JsonResponse
@@ -361,7 +446,8 @@ class ReportController extends Controller
             'entries' => $entries,
             'generatedAt' => now()->format('Y-m-d H:i'),
         ]);
-        return $pdf->download('accountability-report-' . date('Y-m-d-His') . '.pdf');
+
+        return $pdf->download('accountability-report-'.date('Y-m-d-His').'.pdf');
     }
 
     private function streamXlsx(Spreadsheet $spreadsheet, string $filename): StreamedResponse

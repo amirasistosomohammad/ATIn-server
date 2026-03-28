@@ -31,7 +31,7 @@
             <tr>
                 <td>{{ $index + 1 }}</td>
                 <td>{{ $doc->control_number }}</td>
-                <td>{{ $doc->documentType?->name ?? '—' }}</td>
+                <td>{{ $doc->documentTypeLabel() ?: '—' }}</td>
                 <td>{{ $doc->status }}</td>
                 <td>{{ $doc->currentHolder?->name ?? '—' }}</td>
                 <td>{{ $doc->logbookEntries->first()?->action ?? '—' }}</td>

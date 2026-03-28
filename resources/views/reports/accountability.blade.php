@@ -29,7 +29,7 @@
             @foreach($entries as $e)
             <tr>
                 <td>{{ $e->document?->control_number ?? '—' }}</td>
-                <td>{{ $e->document?->documentType?->name ?? '—' }}</td>
+                <td>{{ $e->document ? $e->document->documentTypeLabel() : '—' }}</td>
                 <td>{{ $e->action }}</td>
                 <td>{{ $e->user?->name ?? '—' }}</td>
                 <td>{{ $e->moved_at?->format('Y-m-d H:i') ?? '—' }}</td>

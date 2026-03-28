@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Document;
+use App\Models\DocumentType;
 use App\Models\LogbookEntry;
 use App\Services\AuditLog;
 use Illuminate\Http\JsonResponse;
@@ -26,11 +27,26 @@ class DocumentController extends Controller
         $validated = $request->validate([
             'control_number' => ['required', 'string', 'max:255', 'unique:documents,control_number'],
             'document_type_id' => ['required', 'integer', 'exists:document_types,id'],
+            'document_type_other' => ['nullable', 'string', 'max:255'],
             'description' => ['nullable', 'string', 'max:65535'],
             'supplier_name' => ['nullable', 'string', 'max:255'],
             'amount' => ['nullable', 'numeric', 'min:0'],
             'date_prepared' => ['nullable', 'date'],
         ]);
+
+        $type = DocumentType::find($validated['document_type_id']);
+        if ($type?->isOtherChoice()) {
+            $other = trim((string) ($request->input('document_type_other', '')));
+            if ($other === '') {
+                return response()->json([
+                    'message' => 'Please specify the document type when "Other" is selected.',
+                    'errors' => ['document_type_other' => ['Please specify the document type.']],
+                ], 422);
+            }
+            $validated['document_type_other'] = $other;
+        } else {
+            $validated['document_type_other'] = null;
+        }
 
         $document = Document::create([
             ...$validated,
@@ -43,6 +59,7 @@ class DocumentController extends Controller
 
         AuditLog::log($request->user()->id, 'document_registered', $document->id, $document->control_number, [
             'document_type_id' => $document->document_type_id,
+            'document_type_other' => $document->document_type_other,
         ], $request->user()->email, $request);
 
         return response()->json($document, 201);
@@ -77,13 +94,34 @@ class DocumentController extends Controller
         }
 
         $validated = $request->validate([
-            'control_number' => ['sometimes', 'required', 'string', 'max:255', 'unique:documents,control_number,' . $document->id],
+            'control_number' => ['sometimes', 'required', 'string', 'max:255', 'unique:documents,control_number,'.$document->id],
             'document_type_id' => ['sometimes', 'required', 'integer', 'exists:document_types,id'],
+            'document_type_other' => ['sometimes', 'nullable', 'string', 'max:255'],
             'description' => ['nullable', 'string', 'max:65535'],
             'supplier_name' => ['nullable', 'string', 'max:255'],
             'amount' => ['nullable', 'numeric', 'min:0'],
             'date_prepared' => ['nullable', 'date'],
         ]);
+
+        $typeId = isset($validated['document_type_id'])
+            ? (int) $validated['document_type_id']
+            : (int) $document->document_type_id;
+        $type = DocumentType::find($typeId);
+
+        if ($type?->isOtherChoice()) {
+            $other = $request->has('document_type_other')
+                ? trim((string) $request->input('document_type_other', ''))
+                : trim((string) ($document->document_type_other ?? ''));
+            if ($other === '') {
+                return response()->json([
+                    'message' => 'Please specify the document type when "Other" is selected.',
+                    'errors' => ['document_type_other' => ['Please specify the document type.']],
+                ], 422);
+            }
+            $validated['document_type_other'] = $other;
+        } else {
+            $validated['document_type_other'] = null;
+        }
 
         $document->fill($validated);
         $document->save();
@@ -127,7 +165,7 @@ class DocumentController extends Controller
             $query->where('status', $request->status);
         }
         if ($request->filled('control_number')) {
-            $query->where('control_number', 'like', '%' . $request->control_number . '%');
+            $query->where('control_number', 'like', '%'.$request->control_number.'%');
         }
         if ($request->boolean('created_by_me')) {
             $query->where('created_by_user_id', $request->user()->id);

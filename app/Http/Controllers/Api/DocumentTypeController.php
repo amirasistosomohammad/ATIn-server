@@ -61,4 +61,20 @@ class DocumentTypeController extends Controller
 
         return response()->json(['message' => 'Document type updated.', 'data' => $documentType->fresh()]);
     }
+
+    /**
+     * Delete a document type (admin only). Blocked when any document uses this type.
+     */
+    public function destroy(DocumentType $documentType): JsonResponse
+    {
+        if ($documentType->documents()->exists()) {
+            return response()->json([
+                'message' => 'This document type cannot be deleted because it is assigned to one or more documents.',
+            ], 422);
+        }
+
+        $documentType->delete();
+
+        return response()->json(['message' => 'Document type deleted.']);
+    }
 }

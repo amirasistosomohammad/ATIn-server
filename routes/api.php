@@ -1,14 +1,14 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
-use App\Http\Controllers\Api\DocumentTypeController;
-use App\Http\Controllers\Api\DocumentController;
-use App\Http\Controllers\Api\ReportController;
-use App\Http\Controllers\Api\UserController;
-use App\Http\Controllers\Api\SystemSettingsController;
-use App\Http\Controllers\Api\StorageController;
 use App\Http\Controllers\Api\BackupController;
+use App\Http\Controllers\Api\DocumentController;
+use App\Http\Controllers\Api\DocumentTypeController;
+use App\Http\Controllers\Api\ReportController;
+use App\Http\Controllers\Api\StorageController;
+use App\Http\Controllers\Api\SystemSettingsController;
+use App\Http\Controllers\Api\UserController;
+use Illuminate\Support\Facades\Route;
 
 // Public auth routes
 Route::post('/login', [AuthController::class, 'login']);
@@ -40,6 +40,7 @@ Route::middleware(['auth:sanctum', 'user.active'])->group(function () {
         Route::get('/admin/document-types', [DocumentTypeController::class, 'indexAll']);
         Route::post('/admin/document-types', [DocumentTypeController::class, 'store']);
         Route::put('/admin/document-types/{documentType}', [DocumentTypeController::class, 'update']);
+        Route::delete('/admin/document-types/{documentType}', [DocumentTypeController::class, 'destroy']);
 
         // System settings
         Route::put('/admin/settings', [SystemSettingsController::class, 'update']);
@@ -60,6 +61,9 @@ Route::middleware(['auth:sanctum', 'user.active'])->group(function () {
     Route::post('/documents/{document}/in', [DocumentController::class, 'in']);
     Route::post('/documents/{document}/out', [DocumentController::class, 'out']);
     Route::apiResource('documents', DocumentController::class)->only(['index', 'store', 'show', 'update']);
+
+    // Personnel: own In/Out history + custody snapshot (non-admin sidebar)
+    Route::get('/personnel/history', [ReportController::class, 'personnelHistory']);
 
     // Reports (optional ?format=csv for CSV download)
     Route::get('/reports/tracking', [ReportController::class, 'tracking']);
